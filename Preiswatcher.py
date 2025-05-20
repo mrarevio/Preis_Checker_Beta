@@ -121,16 +121,13 @@ def robust_scrape(url, max_retries=3):
     return None, None
 
 def speichere_tagesdaten(daten, dateipfad):
-    heute = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    df = pd.DataFrame(daten)
-    df = clean_data(df)
-    
-    vorhanden = pd.read_json(dateipfad) if os.path.exists(dateipfad) else pd.DataFrame()
-    vorhanden = clean_data(vorhanden)
-    
-    aktualisiert = pd.concat([vorhanden, df])
-    aktualisiert.to_json(dateipfad, orient='records', indent=2)
-
+    if daten:  # Speicher nur, wenn Daten existieren
+        df = pd.DataFrame(daten)
+        if not df.empty:
+            df = clean_data(df)
+            df.to_json(dateipfad, orient='records', indent=2)
+    else:
+        print("Keine Daten zum Speichern vorhanden.")
 def lade_alle_daten(data_dir):
     alle_daten = []
     for datei in os.listdir(data_dir):
