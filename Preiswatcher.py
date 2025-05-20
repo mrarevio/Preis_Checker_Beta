@@ -1,15 +1,3 @@
-Meinen Script soll ein weiteres TAB für die 5080 Grafikkarten bekommen:
-
-Pass das Script dementsprechend an.
-
-hier sind die Links:
-    "Palit GeForce RTX 5080 GamingPro V1": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-v1-ne75080019t2-gb2031y-a3487808.html",
-    "Zotac GeForce RTX 5080": "https://geizhals.at/zotac-geforce-rtx-5080-v186817.html",
-    "INNO3D GeForce RTX 5080 X3": "https://geizhals.at/inno3d-geforce-rtx-5080-x3-n50803-16d7-176068n-a3382794.html",
-    "Gainward GeForce RTX 5080 Phoenix GS V1": "https://geizhals.at/gainward-geforce-rtx-5080-phoenix-v1-5615-ne75080s19t2-gb2031c-a3491334.html",
-    "Palit GeForce RTX 5080 GamingPro": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-ne75080019t2-gb2031a-a3382521.html",
-
-hier ist das script:
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -78,8 +66,8 @@ st.markdown(f"""
     </style>
 """, unsafe_allow_html=True)
 
-# ========== PRODUKTLISTE ==========
-produkte = {
+# ========== PRODUKTLISTEN ==========
+produkte_5070ti = {
     "Gainward RTX 5070 Ti": "https://geizhals.at/gainward-geforce-rtx-5070-ti-v186843.html",
     "MSI RTX 5070 Ti": "https://geizhals.at/msi-geforce-rtx-5070-ti-v186766.html",
     "Palit RTX 5070 Ti": "https://geizhals.at/palit-geforce-rtx-5070-ti-v186845.html",
@@ -90,23 +78,18 @@ produkte = {
     "Palit GamingPro OC V1": "https://geizhals.at/palit-geforce-rtx-5070-ti-gamingpro-oc-v1-ne7507ts19t2-gb2031y-a3470759.html"
 }
 
-def clean_data(df):
-    # Standardisieren Sie Produktnamen
-    name_mapping = {
-        "Gainward RTX 5070 Ti": "GAINWARD GeForce RTX 5070 Ti Phoenix V1 16G",
-        "MSI RTX 5070 Ti": "MSI GeForce RTX 5070 Ti 16G GAMING TRIO OC 16GB",
-        "Palit RTX 5070 Ti": "Palit GeForce RTX 5070 Ti GamingPro V1 16GB",
-        "Gainward Phoenix": "Gainward GeForce RTX 5070 Ti Phoenix V1 16GB",
-        "MSI Gaming Trio": "MSI GeForce RTX 5070 Ti 16G Gaming Trio OC",
-        "ASUS ROG Strix": "ASUS ROG Strix GeForce RTX 5070 Ti OC",
-        "Palit GamingPro V1": "Palit GeForce RTX 5070 Ti GamingPro V1",
-        "Palit GamingPro OC V1": "Palit GeForce RTX 5070 Ti GamingPro OC V1",
-    }
+produkte_5080 = {
+    "Palit GeForce RTX 5080 GamingPro V1": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-v1-ne75080019t2-gb2031y-a3487808.html",
+    "Zotac GeForce RTX 5080": "https://geizhals.at/zotac-geforce-rtx-5080-v186817.html",
+    "INNO3D GeForce RTX 5080 X3": "https://geizhals.at/inno3d-geforce-rtx-5080-x3-n50803-16d7-176068n-a3382794.html",
+    "Gainward GeForce RTX 5080 Phoenix GS V1": "https://geizhals.at/gainward-geforce-rtx-5080-phoenix-v1-5615-ne75080s19t2-gb2031c-a3491334.html",
+    "Palit GeForce RTX 5080 GamingPro": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-ne75080019t2-gb2031a-a3382521.html",
+}
 
+def clean_data(df):
     if 'product' in df.columns:
-        df['product'] = df['product'].replace(name_mapping)
-    
-    # Sicherstellen, dass der Preis numerisch ist
+        df['product'] = pd.to_numeric(df['product'], errors='coerce')
+
     if 'price' in df.columns:
         df['price'] = pd.to_numeric(df['price'], errors='coerce')
     
@@ -115,7 +98,6 @@ def clean_data(df):
     
     return df
 
-# ========== FUNKTIONEN ==========
 def robust_scrape(url, max_retries=3):
     headers = {'User-Agent': 'Mozilla/5.0'}
     for attempt in range(max_retries):
@@ -124,14 +106,12 @@ def robust_scrape(url, max_retries=3):
             res.raise_for_status()
             soup = BeautifulSoup(res.text, 'html.parser')
             
-            # Mehrere mögliche Preis-Elemente überprüfen
             preis_element = (soup.find('strong', id='pricerange-min') or 
                              soup.find('span', class_='price') or
                              soup.find('div', class_='gh_price'))
             
             if preis_element:
                 preis_text = preis_element.get_text(strip=True)
-                # Robustere Preisbereinigung
                 preis = float(''.join(c for c in preis_text if c.isdigit() or c in ',.').replace('.', '').replace(',', '.'))
                 datum = datetime.now(TIMEZONE)
                 return preis, datum
@@ -140,33 +120,29 @@ def robust_scrape(url, max_retries=3):
             time.sleep(2 ** attempt)
     return None, None
 
-def speichere_tagesdaten(daten):
+def speichere_tagesdaten(daten, dateipfad):
     heute = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
-    datei = os.path.join(DATA_DIR, f"preise_{heute}.json")
-    
-    # Konvertiere die eingehenden Daten zu DataFrame und bereinige sie
     df = pd.DataFrame(daten)
     df = clean_data(df)
     
-    vorhanden = pd.read_json(datei) if os.path.exists(datei) else pd.DataFrame()
+    vorhanden = pd.read_json(dateipfad) if os.path.exists(dateipfad) else pd.DataFrame()
     vorhanden = clean_data(vorhanden)
     
     aktualisiert = pd.concat([vorhanden, df])
-    aktualisiert.to_json(datei, orient='records', indent=2)
+    aktualisiert.to_json(dateipfad, orient='records', indent=2)
 
-def lade_alle_daten():
+def lade_alle_daten(data_dir):
     alle_daten = []
-    for datei in os.listdir(DATA_DIR):
+    for datei in os.listdir(data_dir):
         if datei.startswith("preise_") and datei.endswith(".json"):
             try:
-                df = pd.read_json(os.path.join(DATA_DIR, datei))
+                df = pd.read_json(os.path.join(data_dir, datei))
                 df = clean_data(df)
                 alle_daten.append(df)
             except:
                 continue
     return pd.concat(alle_daten, ignore_index=True) if alle_daten else pd.DataFrame()
 
-# Funktion zum Anzeigen des Preisverlaufs
 def show_price_trend(df):
     st.subheader("📈 Preisverlauf")
     if not df.empty:
@@ -207,7 +183,6 @@ def show_price_trend(df):
         else:
             st.info("Bitte wähle mindestens ein Modell aus, um den Preisverlauf anzuzeigen.")
 
-# Funktion zum Anzeigen historischer Preise
 def show_historical_prices(df):
     st.subheader("📜 Historische Preise")
     if not df.empty:
@@ -225,53 +200,40 @@ def show_historical_prices(df):
         else:
             st.info("Keine historischen Daten für das gewählte Produkt verfügbar.")
 
-# ========== DASHBOARD ==========
 st.title("💻 GPU Preis-Tracker Pro")
 
-tab1, tab2, tab3 = st.tabs(["📊 Übersicht", "⚙️ Einstellungen", "📈 Analyse"])
+tab1, tab2, tab3, tab4 = st.tabs(["5070 Ti Übersicht", "5080 Übersicht", "⚙️ Einstellungen", "📈 Analyse"])
 
-# === TAB 1: Übersicht ===
+# === TAB 1: Übersicht 5070 Ti ===
 with tab1:
     col1, col2 = st.columns([1, 2])
 
-    with col1:
-        st.subheader("🔔 Aktive Preisalarme")
-        if 'alarm_price' in st.session_state:
-            df = lade_alle_daten()
-            if not df.empty:
-                df['date'] = pd.to_datetime(df['date'])
-                aktuell = df.sort_values('date', ascending=False).drop_duplicates('product')
-                alarme = aktuell[aktuell['price'] <= st.session_state.alarm_price]
-                if not alarme.empty:
-                    for _, row in alarme.iterrows():
-                        st.warning(f"**{row['product']}** für {row['price']:.2f} €")
-                        st.markdown(f"[🔗 Produktlink]({row['url']})")
-                else:
-                    st.success("Keine aktiven Preisalarme")
-            else:
-                st.info("Noch keine Daten verfügbar")
+    st.header("Preisübersicht für 5070 Ti")
+    daten_5070ti = []
+    for name, url in produkte_5070ti.items():
+        preis, datum = robust_scrape(url)
+        if preis is not None:
+            daten_5070ti.append({'product': name, 'price': preis, 'date': datum, 'url': url})
+    speichere_tagesdaten(daten_5070ti, os.path.join(DATA_DIR, "preise_5070ti.json"))
+    df_5070ti = lade_alle_daten(DATA_DIR)
+    if not df_5070ti.empty:
+        st.dataframe(df_5070ti[['product', 'price', 'date', 'url']], use_container_width=True)
 
-        st.subheader("🔄 Schnellaktionen")
-        if st.button("Preise jetzt aktualisieren"):
-            with st.spinner("Preise werden aktualisiert..."):
-                daten = []
-                fortschritt = st.progress(0)
-                for i, (name, url) in enumerate(produkte.items()):
-                    preis, datum = robust_scrape(url)
-                    if preis:
-                        daten.append({'product': name, 'price': preis, 'date': datum, 'url': url})
-                    fortschritt.progress((i + 1) / len(produkte))
-                    time.sleep(1)
-                if daten:
-                    speichere_tagesdaten(daten)
-                    st.success(f"{len(daten)} Preise aktualisiert!")
-                    st.rerun()
-
-    with col2:
-        show_price_trend(lade_alle_daten())  # Preisverlauf anzeigen
-
-# === TAB 2: Einstellungen ===
+# === TAB 2: Übersicht 5080 ===
 with tab2:
+    st.header("Preisübersicht für 5080")
+    daten_5080 = []
+    for name, url in produkte_5080.items():
+        preis, datum = robust_scrape(url)
+        if preis is not None:
+            daten_5080.append({'product': name, 'price': preis, 'date': datum, 'url': url})
+    speichere_tagesdaten(daten_5080, os.path.join(DATA_DIR, "preise_5080.json"))
+    df_5080 = lade_alle_daten(DATA_DIR)
+    if not df_5080.empty:
+        st.dataframe(df_5080[['product', 'price', 'date', 'url']], use_container_width=True)
+
+# === TAB 3: Einstellungen ===
+with tab3:
     with st.form("einstellungen_formular"):
         alarm_price = st.number_input("Preisalarm setzen (€)", min_value=100, value=700, step=10)
         email = st.text_input("Benachrichtigungs-E-Mail")
@@ -291,21 +253,21 @@ with tab2:
             }
             st.success("Einstellungen gespeichert!")
 
-# === TAB 3: Analyse ===
-with tab3:
-    df = lade_alle_daten()
-    if not df.empty:
-        show_historical_prices(df)  # Historische Preise anzeigen
+# === TAB 4: Analyse ===
+with tab4:
+    df_combined = pd.concat([df_5070ti, df_5080], ignore_index=True)
+    if not df_combined.empty:
+        show_historical_prices(df_combined)  # Historische Preise anzeigen
 
         st.subheader("📊 Analyse")
-        df['date'] = pd.to_datetime(df['date'])
-        st.dataframe(df.sort_values('date', ascending=False), use_container_width=True)
+        df_combined['date'] = pd.to_datetime(df_combined['date'])
+        st.dataframe(df_combined.sort_values('date', ascending=False), use_container_width=True)
 
         st.subheader("Statistik")
-        stats = df.groupby('product')['price'].agg(['min', 'max', 'mean', 'last'])
+        stats = df_combined.groupby('product')['price'].agg(['min', 'max', 'mean', 'last'])
         st.dataframe(stats.style.format("{:.2f}€"), use_container_width=True)
 
-        fig = px.box(df, x="product", y="price", color="product")
+        fig = px.box(df_combined, x="product", y="price", color="product")
         st.plotly_chart(fig, use_container_width=True)
 
 # === AUTOMATISCHES UPDATE ===
@@ -314,13 +276,21 @@ if 'last_update' not in st.session_state:
 
 if (datetime.now() - st.session_state.last_update) > timedelta(hours=24):
     with st.spinner("Tägliches Update läuft..."):
-        auto_data = []
-        for name, url in produkte.items():
+        auto_data_5070ti = []
+        for name, url in produkte_5070ti.items():
             preis, datum = robust_scrape(url)
-            if preis:
-                auto_data.append({'product': name, 'price': preis, 'date': datum, 'url': url})
-                time.sleep(1)
-        if auto_data:
-            speichere_tagesdaten(auto_data)
-            st.session_state.last_update = datetime.now()
-            st.rerun()
+            if preis is not None:
+                auto_data_5070ti.append({'product': name, 'price': preis, 'date': datum, 'url': url})
+            time.sleep(1)
+        speichere_tagesdaten(auto_data_5070ti, os.path.join(DATA_DIR, "preise_5070ti.json"))
+        
+        auto_data_5080 = []
+        for name, url in produkte_5080.items():
+            preis, datum = robust_scrape(url)
+            if preis is not None:
+                auto_data_5080.append({'product': name, 'price': preis, 'date': datum, 'url': url})
+            time.sleep(1)
+        speichere_tagesdaten(auto_data_5080, os.path.join(DATA_DIR, "preise_5080.json"))
+
+        st.session_state.last_update = datetime.now()
+        st.rerun()
