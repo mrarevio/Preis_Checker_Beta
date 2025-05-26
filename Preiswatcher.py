@@ -23,7 +23,7 @@ text_color = "#333"
 font = "Helvetica Neue, sans-serif"
 
 st.set_page_config(
-    page_title="GPU Preis-Tracker Pro",
+    page_title="GPU Preis-Tracker Pro-Alpha",
     page_icon="💻",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -151,29 +151,29 @@ def filter_timeframe(df, days):
 def calculate_price_change(df, product, days):
     if df.empty:
         return None, None
-    
+
     product_data = df[df['product'] == product].sort_values('date')
     if len(product_data) < 2:
         return None, None
-    
+
     current_price = product_data.iloc[-1]['price']
-    
+
     cutoff_date = datetime.now() - timedelta(days=days)
     past_data = product_data[product_data['date'] >= cutoff_date.strftime('%Y-%m-%d')]
-    
+
     if len(past_data) == 0:
         return None, None
-    
+
     past_price = past_data.iloc[0]['price']
     price_change = current_price - past_price
     percent_change = (price_change / past_price) * 100
-    
+
     return price_change, percent_change
 
 def create_price_card(product, current_price, price_change, percent_change):
     change_direction = "positive" if price_change > 0 else "negative"
     change_icon = "📈" if price_change > 0 else "📉"
-    
+
     st.markdown(f"""
     <div class="price-card">
         <h3>{product}</h3>
@@ -187,7 +187,7 @@ def show_price_trend(df, selected_timeframe):
     if not df.empty:
         df['date'] = pd.to_datetime(df['date'])
         df = df.sort_values('date')
-        
+
         # Filter data based on selected timeframe
         if selected_timeframe == "1 Woche":
             df = filter_timeframe(df, 7)
@@ -199,14 +199,14 @@ def show_price_trend(df, selected_timeframe):
         # Initialize session state for selected products if not exists
         if 'selected_products' not in st.session_state:
             st.session_state.selected_products = df['product'].unique()[:3]
-        
+
         ausgewählte_produkte = st.multiselect(
             "Modelle auswählen",
             options=df['product'].unique(),
             default=st.session_state.selected_products,
             key="product_selection"
         )
-        
+
         # Update session state only if we have selected products
         if ausgewählte_produkte:
             if 'selected_products' not in st.session_state or ausgewählte_produkte != st.session_state.selected_products:
@@ -215,7 +215,7 @@ def show_price_trend(df, selected_timeframe):
 
         if ausgewählte_produkte:
             gefiltert = df[df['product'].isin(ausgewählte_produkte)]
-            
+
             # Create price cards for selected products
             cols = st.columns(len(ausgewählte_produkte))
             for idx, produkt in enumerate(ausgewählte_produkte):
@@ -225,7 +225,7 @@ def show_price_trend(df, selected_timeframe):
                     price_change, percent_change = calculate_price_change(pdata, produkt, 
                                                                         7 if selected_timeframe == "1 Woche" else 
                                                                         30 if selected_timeframe == "1 Monat" else 365)
-                    
+
                     with cols[idx]:
                         if price_change is not None and percent_change is not None:
                             create_price_card(produkt, current_price, price_change, percent_change)
@@ -240,7 +240,7 @@ def show_price_trend(df, selected_timeframe):
 
             # Create interactive chart
             fig = make_subplots(specs=[[{"secondary_y": False}]])
-            
+
             for produkt in ausgewählte_produkte:
                 pdata = gefiltert[gefiltert['product'] == produkt]
                 fig.add_trace(go.Scatter(
@@ -264,7 +264,7 @@ def show_price_trend(df, selected_timeframe):
                 font=dict(color=text_color),
                 height=500
             )
-            
+
             # Add range slider
             fig.update_layout(
                 xaxis=dict(
@@ -281,7 +281,7 @@ def show_price_trend(df, selected_timeframe):
                     type="date"
                 )
             )
-            
+
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Bitte wähle mindestens ein Modell aus, um den Preisverlauf anzuzeigen.")
@@ -298,17 +298,17 @@ def show_historical_prices(df):
         if not historisch_df.empty:
             historisch_df['date'] = pd.to_datetime(historisch_df['date'])
             historisch_df = historisch_df.sort_values('date', ascending=False)
-            
+
             # Calculate price changes
             historisch_df['price_change'] = historisch_df['price'].diff(-1)
             historisch_df['percent_change'] = (historisch_df['price_change'] / historisch_df['price'].shift(-1)) * 100
-            
+
             # Format the display
             display_df = historisch_df[['date', 'price', 'price_change', 'percent_change']].copy()
             display_df['price'] = display_df['price'].apply(lambda x: f"{x:.2f}€")
             display_df['price_change'] = display_df['price_change'].apply(lambda x: f"{x:+.2f}€" if pd.notnull(x) else "")
             display_df['percent_change'] = display_df['percent_change'].apply(lambda x: f"{x:+.2f}%" if pd.notnull(x) else "")
-            
+
             st.dataframe(display_df, use_container_width=True)
         else:
             st.info("Keine historischen Daten für das gewählte Produkt verfügbar.")
@@ -357,10 +357,10 @@ with tab3:
         with col3:
             if st.button("1 Jahr", key="year_btn"):
                 st.session_state.timeframe = "1 Jahr"
-        
+
         if 'timeframe' not in st.session_state:
             st.session_state.timeframe = "1 Monat"
-        
+
         st.markdown(f"### 📊 Preis-Dashboard - {st.session_state.timeframe}")
 
         # Schnellauswahl Buttons
@@ -383,7 +383,7 @@ with tab3:
             # Datenaufbereitung
             df['date'] = pd.to_datetime(df['date'])
             df = df.sort_values('date')
-            
+
             # Zeitfilterung mit expliziter Bedingung
             days = 7 if st.session_state.timeframe == "1 Woche" else 30 if st.session_state.timeframe == "1 Monat" else 365
             cutoff_date = datetime.now() - timedelta(days=days)
@@ -420,7 +420,7 @@ with tab3:
                     if not produkt_daten.empty:
                         current_price = produkt_daten.iloc[-1]['price']
                         price_change, pct_change = calculate_price_change(produkt_daten, produkt, days)
-                        
+
                         if price_change is not None and pct_change is not None:
                             create_price_card(produkt, current_price, price_change, pct_change)
                         else:
@@ -435,7 +435,7 @@ with tab3:
             # Diagramm erstellen
             st.subheader("Preisverlauf")
             fig = go.Figure()
-            
+
             for produkt in st.session_state.selected_products:
                 produkt_daten = df_filtered[df_filtered['product'] == produkt]
                 if not produkt_daten.empty:
