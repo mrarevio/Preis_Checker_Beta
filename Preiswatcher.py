@@ -1,5 +1,6 @@
 import streamlit as st
-import requests
+import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
@@ -9,11 +10,16 @@ import time
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import cloudscraper
+from cachetools import TTLCache
+import concurrent.futures
 
 # ========== KONFIGURATION ==========
 TIMEZONE = None
 DATA_DIR = "preis_daten"
 os.makedirs(DATA_DIR, exist_ok=True)
+
+# Cache für Preisdaten (TTL: 1 Stunde)
+price_cache = TTLCache(maxsize=100, ttl=3600)
 
 # ========== DESIGN-EINSTELLUNGEN ==========
 primary_color = "#FF4B4B"
@@ -29,7 +35,8 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-st.markdown(f"""
+# CSS in separate variable to improve performance
+CUSTOM_CSS = f"""
     <style>
         .main {{
             background-color: {bg_color};
@@ -81,7 +88,9 @@ st.markdown(f"""
             font-weight: bold;
         }}
     </style>
-""", unsafe_allow_html=True)
+"""
+
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 # ========== PRODUKTLISTEN ==========
 produkte_5070ti = {
@@ -103,44 +112,60 @@ produkte_5080 = {
     "Palit GeForce RTX 5080 GamingPro": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-ne75080019t2-gb2031a-a3382521.html",
 }
 
-def robust_scrape(url, max_retries=3):
-    scraper = cloudscraper.create_scraper()
+async def async_scrape(session, url, name):
+    cache_key = f"{url}_{datetime.now().strftime('%Y-%m-%d-%H')}"
+    if cache_key in price_cache:
+        return price_cache[cache_key]
+
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                       '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     }
 
-    for attempt in range(max_retries):
-        try:
-            res = scraper.get(url, headers=headers, timeout=10)
-            res.raise_for_status()
-            soup = BeautifulSoup(res.text, 'html.parser')
+    try:
+        async with session.get(url, headers=headers, timeout=10) as response:
+            if response.status == 200:
+                html = await response.text()
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                preis_element = (
+                    soup.find('strong', id='pricerange-min') or
+                    soup.find('span', class_='price') or
+                    soup.find('div', class_='gh_price')
+                )
 
-            preis_element = (
-                soup.find('strong', id='pricerange-min') or
-                soup.find('span', class_='price') or
-                soup.find('div', class_='gh_price')
-            )
+                if preis_element:
+                    preis_text = preis_element.get_text(strip=True)
+                    preis = float(''.join(c for c in preis_text if c.isdigit() or c in ',.').replace('.', '').replace(',', '.'))
+                    datum = datetime.now(TIMEZONE)
+                    result = {'product': name, 'price': preis, 'date': datum, 'url': url}
+                    price_cache[cache_key] = result
+                    return result
+    except Exception as e:
+        print(f"Fehler beim Scrapen von {url}: {e}")
+    return None
 
-            if preis_element:
-                preis_text = preis_element.get_text(strip=True)
-                preis = float(''.join(c for c in preis_text if c.isdigit() or c in ',.').replace('.', '').replace(',', '.'))
-                datum = datetime.now(TIMEZONE)
-                return preis, datum
-        except Exception as e:
-            print(f"Fehler bei Versuch {attempt + 1}: {e}")
-            time.sleep(2 ** attempt)
-    return None, None
+async def fetch_all_prices(products):
+    async with aiohttp.ClientSession() as session:
+        tasks = [async_scrape(session, url, name) for name, url in products.items()]
+        results = await asyncio.gather(*tasks)
+        return [r for r in results if r is not None]
+
+@st.cache_data(ttl=3600)
+def load_and_process_data(file_path):
+    if os.path.exists(file_path):
+        return pd.read_json(file_path)
+    return pd.DataFrame()
 
 def speichere_tagesdaten(daten, dateipfad):
+    if not daten:
+        return
+        
     df = pd.DataFrame(daten)
     if not df.empty:
-        vorhanden = pd.read_json(dateipfad) if os.path.exists(dateipfad) else pd.DataFrame()
-        aktualisiert = pd.concat([vorhanden, df])
+        vorhanden = load_and_process_data(dateipfad)
+        aktualisiert = pd.concat([vorhanden, df], ignore_index=True)
         aktualisiert.to_json(dateipfad, orient='records', indent=2)
-
-def lade_daten(dateipfad):
-    return pd.read_json(dateipfad) if os.path.exists(dateipfad) else pd.DataFrame()
 
 def filter_timeframe(df, days):
     if df.empty:
@@ -157,7 +182,6 @@ def calculate_price_change(df, product, days):
         return None, None
 
     current_price = product_data.iloc[-1]['price']
-
     cutoff_date = datetime.now() - timedelta(days=days)
     past_data = product_data[product_data['date'] >= cutoff_date.strftime('%Y-%m-%d')]
 
@@ -183,12 +207,34 @@ def create_price_card(product, current_price, price_change, percent_change):
     </div>
     """, unsafe_allow_html=True)
 
+@st.cache_data(ttl=3600)
+def create_price_trend_figure(df, selected_products, timeframe):
+    fig = go.Figure()
+    
+    for produkt in selected_products:
+        produkt_daten = df[df['product'] == produkt]
+        if not produkt_daten.empty:
+            fig.add_trace(go.Scatter(
+                x=produkt_daten['date'],
+                y=produkt_daten['price'],
+                name=produkt,
+                mode='lines+markers'
+            ))
+
+    fig.update_layout(
+        title=f"Preisentwicklung - {timeframe}",
+        xaxis_title="Datum",
+        yaxis_title="Preis (€)",
+        hovermode="x unified"
+    )
+    
+    return fig
+
 def show_price_trend(df, selected_timeframe):
     if not df.empty:
         df['date'] = pd.to_datetime(df['date'])
         df = df.sort_values('date')
 
-        # Filter data based on selected timeframe
         if selected_timeframe == "1 Woche":
             df = filter_timeframe(df, 7)
         elif selected_timeframe == "1 Monat":
@@ -196,7 +242,6 @@ def show_price_trend(df, selected_timeframe):
         elif selected_timeframe == "1 Jahr":
             df = filter_timeframe(df, 365)
 
-        # Initialize session state for selected products if not exists
         if 'selected_products' not in st.session_state:
             st.session_state.selected_products = df['product'].unique()[:3]
 
@@ -207,24 +252,23 @@ def show_price_trend(df, selected_timeframe):
             key="product_selection"
         )
 
-        # Update session state only if we have selected products
         if ausgewählte_produkte:
             if 'selected_products' not in st.session_state or ausgewählte_produkte != st.session_state.selected_products:
                 st.session_state.selected_products = ausgewählte_produkte
                 st.rerun()
 
-        if ausgewählte_produkte:
             gefiltert = df[df['product'].isin(ausgewählte_produkte)]
-
-            # Create price cards for selected products
+            
             cols = st.columns(len(ausgewählte_produkte))
             for idx, produkt in enumerate(ausgewählte_produkte):
                 pdata = gefiltert[gefiltert['product'] == produkt]
                 if not pdata.empty:
                     current_price = pdata.iloc[-1]['price']
-                    price_change, percent_change = calculate_price_change(pdata, produkt, 
-                                                                        7 if selected_timeframe == "1 Woche" else 
-                                                                        30 if selected_timeframe == "1 Monat" else 365)
+                    price_change, percent_change = calculate_price_change(
+                        pdata, produkt,
+                        7 if selected_timeframe == "1 Woche" else 
+                        30 if selected_timeframe == "1 Monat" else 365
+                    )
 
                     with cols[idx]:
                         if price_change is not None and percent_change is not None:
@@ -238,50 +282,7 @@ def show_price_trend(df, selected_timeframe):
                             </div>
                             """, unsafe_allow_html=True)
 
-            # Create interactive chart
-            fig = make_subplots(specs=[[{"secondary_y": False}]])
-
-            for produkt in ausgewählte_produkte:
-                pdata = gefiltert[gefiltert['product'] == produkt]
-                fig.add_trace(go.Scatter(
-                    x=pdata['date'],
-                    y=pdata['price'],
-                    name=produkt,
-                    mode='lines+markers',
-                    line=dict(width=2),
-                    marker=dict(size=8),
-                    hoverinfo='text',
-                    hovertext=[f"{produkt}<br>{x.date()}<br>{y:.2f}€" for x, y in zip(pdata['date'], pdata['price'])]
-                ))
-
-            fig.update_layout(
-                title=f"Preisverlauf der GPUs - {selected_timeframe}",
-                xaxis_title="Datum",
-                yaxis_title="Preis (€)",
-                hovermode="x unified",
-                plot_bgcolor='rgba(0,0,0,0)',
-                paper_bgcolor='rgba(0,0,0,0)',
-                font=dict(color=text_color),
-                height=500
-            )
-
-            # Add range slider
-            fig.update_layout(
-                xaxis=dict(
-                    rangeselector=dict(
-                        buttons=list([
-                            dict(count=7, label="1W", step="day", stepmode="backward"),
-                            dict(count=1, label="1M", step="month", stepmode="backward"),
-                            dict(count=6, label="6M", step="month", stepmode="backward"),
-                            dict(count=1, label="1J", step="year", stepmode="backward"),
-                            dict(label="Alles", step="all")
-                        ])
-                    ),
-                    rangeslider=dict(visible=True),
-                    type="date"
-                )
-            )
-
+            fig = create_price_trend_figure(gefiltert, ausgewählte_produkte, selected_timeframe)
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Bitte wähle mindestens ein Modell aus, um den Preisverlauf anzuzeigen.")
@@ -299,11 +300,9 @@ def show_historical_prices(df):
             historisch_df['date'] = pd.to_datetime(historisch_df['date'])
             historisch_df = historisch_df.sort_values('date', ascending=False)
 
-            # Calculate price changes
             historisch_df['price_change'] = historisch_df['price'].diff(-1)
             historisch_df['percent_change'] = (historisch_df['price_change'] / historisch_df['price'].shift(-1)) * 100
 
-            # Format the display
             display_df = historisch_df[['date', 'price', 'price_change', 'percent_change']].copy()
             display_df['price'] = display_df['price'].apply(lambda x: f"{x:.2f}€")
             display_df['price_change'] = display_df['price_change'].apply(lambda x: f"{x:+.2f}€" if pd.notnull(x) else "")
@@ -317,159 +316,72 @@ st.title("💻 GPU Preis-Tracker Pro")
 
 tab1, tab2, tab3 = st.tabs(["5070 Ti", "5080", "📈 Preis-Dashboard"])
 
-# === TAB 1: 5070 Ti Preisübersicht ===
-with tab1:
-    st.header("Preisübersicht für 5070 Ti")
-    daten_5070ti = []
-    for name, url in produkte_5070ti.items():
-        preis, datum = robust_scrape(url)
-        if preis is not None:
-            daten_5070ti.append({'product': name, 'price': preis, 'date': datum, 'url': url})
-    speichere_tagesdaten(daten_5070ti, os.path.join(DATA_DIR, "preise_5070ti.json"))
-    df_5070ti = lade_daten(os.path.join(DATA_DIR, "preise_5070ti.json"))
-    st.dataframe(df_5070ti[['product', 'price', 'date', 'url']], use_container_width=True)
+async def main():
+    # === TAB 1: 5070 Ti Preisübersicht ===
+    with tab1:
+        st.header("Preisübersicht für 5070 Ti")
+        daten_5070ti = await fetch_all_prices(produkte_5070ti)
+        speichere_tagesdaten(daten_5070ti, os.path.join(DATA_DIR, "preise_5070ti.json"))
+        df_5070ti = load_and_process_data(os.path.join(DATA_DIR, "preise_5070ti.json"))
+        st.dataframe(df_5070ti[['product', 'price', 'date', 'url']], use_container_width=True)
 
-# === TAB 2: 5080 Preisübersicht ===
-with tab2:
-    st.header("Preisübersicht für 5080")
-    daten_5080 = []
-    for name, url in produkte_5080.items():
-        preis, datum = robust_scrape(url)
-        if preis is not None:
-            daten_5080.append({'product': name, 'price': preis, 'date': datum, 'url': url})
-    speichere_tagesdaten(daten_5080, os.path.join(DATA_DIR, "preise_5080.json"))
-    df_5080 = lade_daten(os.path.join(DATA_DIR, "preise_5080.json"))
-    st.dataframe(df_5080[['product', 'price', 'date', 'url']], use_container_width=True)
+    # === TAB 2: 5080 Preisübersicht ===
+    with tab2:
+        st.header("Preisübersicht für 5080")
+        daten_5080 = await fetch_all_prices(produkte_5080)
+        speichere_tagesdaten(daten_5080, os.path.join(DATA_DIR, "preise_5080.json"))
+        df_5080 = load_and_process_data(os.path.join(DATA_DIR, "preise_5080.json"))
+        st.dataframe(df_5080[['product', 'price', 'date', 'url']], use_container_width=True)
 
-# === TAB 3: Preis-Dashboard ===
-with tab3:
-    df = pd.concat([df_5070ti, df_5080], ignore_index=True)
-    if not df.empty:
-        # Timeframe selection
-        st.subheader("Zeitraum auswählen")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button("1 Woche", key="week_btn"):
-                st.session_state.timeframe = "1 Woche"
-        with col2:
-            if st.button("1 Monat", key="month_btn"):
+    # === TAB 3: Preis-Dashboard ===
+    with tab3:
+        df = pd.concat([df_5070ti, df_5080], ignore_index=True)
+        if not df.empty:
+            st.subheader("Zeitraum auswählen")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("1 Woche", key="week_btn"):
+                    st.session_state.timeframe = "1 Woche"
+            with col2:
+                if st.button("1 Monat", key="month_btn"):
+                    st.session_state.timeframe = "1 Monat"
+            with col3:
+                if st.button("1 Jahr", key="year_btn"):
+                    st.session_state.timeframe = "1 Jahr"
+
+            if 'timeframe' not in st.session_state:
                 st.session_state.timeframe = "1 Monat"
-        with col3:
-            if st.button("1 Jahr", key="year_btn"):
-                st.session_state.timeframe = "1 Jahr"
 
-        if 'timeframe' not in st.session_state:
-            st.session_state.timeframe = "1 Monat"
+            st.markdown(f"### 📊 Preis-Dashboard - {st.session_state.timeframe}")
 
-        st.markdown(f"### 📊 Preis-Dashboard - {st.session_state.timeframe}")
+            st.subheader("Schnellauswahl")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                if st.button("Alle RTX 5070 Ti Modelle"):
+                    st.session_state.selected_products = [p for p in df['product'].unique() if "5070" in p]
+                    st.rerun()
+            with col2:
+                if st.button("Alle RTX 5080 Modelle"):
+                    st.session_state.selected_products = [p for p in df['product'].unique() if "5080" in p]
+                    st.rerun()
+            with col3:
+                if st.button("Auswahl zurücksetzen"):
+                    st.session_state.selected_products = []
+                    st.rerun()
 
-        # Schnellauswahl Buttons
-        st.subheader("Schnellauswahl")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            if st.button("Alle RTX 5070 Ti Modelle"):
-                st.session_state.selected_products = [p for p in df['product'].unique() if "5070" in p]
-                st.rerun()
-        with col2:
-            if st.button("Alle RTX 5080 Modelle"):
-                st.session_state.selected_products = [p for p in df['product'].unique() if "5080" in p]
-                st.rerun()
-        with col3:
-            if st.button("Auswahl zurücksetzen"):
-                st.session_state.selected_products = []
-                st.rerun()
-
-        try:
-            # Datenaufbereitung
-            df['date'] = pd.to_datetime(df['date'])
-            df = df.sort_values('date')
-
-            # Zeitfilterung mit expliziter Bedingung
-            days = 7 if st.session_state.timeframe == "1 Woche" else 30 if st.session_state.timeframe == "1 Monat" else 365
-            cutoff_date = datetime.now() - timedelta(days=days)
-            mask = df['date'] >= cutoff_date
-            df_filtered = df[mask].copy()
-
-            # Produktauswahl
-            if 'selected_products' not in st.session_state:
-                st.session_state.selected_products = df['product'].unique()[:3]
-
-            auswahl = st.multiselect(
-                "Modelle auswählen",
-                options=df['product'].unique(),
-                default=st.session_state.selected_products,
-                key="model_selection"
-            )
-
-            # Update selection only if changed
-            if set(auswahl) != set(st.session_state.get('selected_products', [])):
-                st.session_state.selected_products = auswahl
-                st.rerun()
-
-            # Nur fortfahren wenn Produkte ausgewählt sind
-            if not st.session_state.selected_products:
-                st.warning("Bitte wählen Sie mindestens ein Modell aus")
-                st.stop()
-
-            # Preiskarten anzeigen
-            st.subheader("Aktuelle Preise")
-            cols = st.columns(len(st.session_state.selected_products))
-            for idx, produkt in enumerate(st.session_state.selected_products):
-                with cols[idx]:
-                    produkt_daten = df_filtered[df_filtered['product'] == produkt]
-                    if not produkt_daten.empty:
-                        current_price = produkt_daten.iloc[-1]['price']
-                        price_change, pct_change = calculate_price_change(produkt_daten, produkt, days)
-
-                        if price_change is not None and pct_change is not None:
-                            create_price_card(produkt, current_price, price_change, pct_change)
-                        else:
-                            st.markdown(f"""
-                            <div class="price-card">
-                                <h3>{produkt}</h3>
-                                <h2>{current_price:.2f}€</h2>
-                                <p>Keine Vergleichsdaten</p>
-                            </div>
-                            """, unsafe_allow_html=True)
-
-            # Diagramm erstellen
-            st.subheader("Preisverlauf")
-            fig = go.Figure()
-
-            for produkt in st.session_state.selected_products:
-                produkt_daten = df_filtered[df_filtered['product'] == produkt]
-                if not produkt_daten.empty:
-                    fig.add_trace(go.Scatter(
-                        x=produkt_daten['date'],
-                        y=produkt_daten['price'],
-                        name=produkt,
-                        mode='lines+markers'
-                    ))
-
-            fig.update_layout(
-                title=f"Preisentwicklung - {st.session_state.timeframe}",
-                xaxis_title="Datum",
-                yaxis_title="Preis (€)",
-                hovermode="x unified"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Fehler: {str(e)}")
-            st.stop()
-
-        # Historische Preise
-        with st.expander("Historische Preisdaten"):
             try:
-                show_historical_prices(df)
-            except Exception as e:
-                st.error(f"Fehler bei historischen Daten: {str(e)}")
+                show_price_trend(df, st.session_state.timeframe)
 
-        # Statistiken
-        with st.expander("Statistische Analyse"):
-            try:
-                st.subheader("Preisstatistiken")
-                stats = df.groupby('product')['price'].agg(['min', 'max', 'mean', 'std', 'count'])
-                st.dataframe(stats.style.format("{:.2f}"))
+                with st.expander("Historische Preisdaten"):
+                    show_historical_prices(df)
+
+                with st.expander("Statistische Analyse"):
+                    st.subheader("Preisstatistiken")
+                    stats = df.groupby('product')['price'].agg(['min', 'max', 'mean', 'std', 'count'])
+                    st.dataframe(stats.style.format("{:.2f}"))
+
             except Exception as e:
-                st.error(f"Fehler bei Statistiken: {str(e)}")
+                st.error(f"Fehler: {str(e)}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
