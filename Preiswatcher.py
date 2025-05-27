@@ -9,37 +9,14 @@ from fake_useragent import UserAgent
 import os
 import json
 
-# --- Streamlit Konfiguration ---
-st.set_page_config(
-    page_title="🚀 GPU-Preis Tracker Pro",
-    page_icon="💻",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# --- Design-Einstellungen ---
-st.markdown("""
-    <style>
-        .main {background-color: #f0f2f6;}
-        .stAlert {border-left: 4px solid #FF4B4B;}
-        .stProgress > div > div > div {background-color: #FF4B4B;}
-        .price-card {
-            background: white;
-            border-radius: 10px;
-            padding: 15px;
-            margin: 10px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-# --- Globale Variablen ---
+# --- Globale Variablen (müssen VOR der main()-Funktion definiert werden) ---
 USER_AGENT = UserAgent()
-REQUEST_DELAY = (5, 15)  # Längere Wartezeiten für Geizhals
+REQUEST_DELAY = (5, 15)
 DATA_FILE = "gpu_prices.json"
 
 # --- Produktliste ---
 PRODUCTS = {
+    "RTX 5070 Ti": {
   "Gainward RTX 5070 Ti": "https://geizhals.at/gainward-geforce-rtx-5070-ti-v186843.html",
     "MSI RTX 5070 Ti": "https://geizhals.at/msi-geforce-rtx-5070-ti-v186766.html",
     "Palit RTX 5070 Ti": "https://geizhals.at/palit-geforce-rtx-5070-ti-v186845.html",
@@ -48,17 +25,16 @@ PRODUCTS = {
     "ASUS ROG Strix": "https://geizhals.at/asus-rog-strix-geforce-rtx-5070-ti-oc-a3382464.html",
     "Palit GamingPro V1": "https://geizhals.at/palit-geforce-rtx-5070-ti-gamingpro-v1-ne7507t019t2-gb2031y-a3470756.html",
     "Palit GamingPro OC V1": "https://geizhals.at/palit-geforce-rtx-5070-ti-gamingpro-oc-v1-ne7507ts19t2-gb2031y-a3470759.html"
-}
-
-produkte_5080 = {
+    },
+    "RTX 5080": {
     "Palit GeForce RTX 5080 GamingPro V1": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-v1-ne75080019t2-gb2031y-a3487808.html",
     "Zotac GeForce RTX 5080": "https://geizhals.at/zotac-geforce-rtx-5080-v186817.html",
     "INNO3D GeForce RTX 5080 X3": "https://geizhals.at/inno3d-geforce-rtx-5080-x3-n50803-16d7-176068n-a3382794.html",
     "Gainward GeForce RTX 5080 Phoenix GS V1": "https://geizhals.at/gainward-geforce-rtx-5080-phoenix-v1-5615-ne75080s19t2-gb2031c-a3491334.html",
     "Palit GeForce RTX 5080 GamingPro": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-ne75080019t2-gb2031a-a3382521.html",
+    }
 }
 
-# --- Datenhandling ---
 def load_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r") as f:
@@ -69,7 +45,6 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
-# --- Verbesserte Scraping-Funktion ---
 def scrape_price(url):
     scraper = cloudscraper.create_scraper()
     headers = {
@@ -79,9 +54,7 @@ def scrape_price(url):
     }
     
     try:
-        # Zufällige Wartezeit
         time.sleep(random.uniform(*REQUEST_DELAY))
-        
         response = scraper.get(url, headers=headers, timeout=20)
         response.raise_for_status()
         
@@ -90,13 +63,15 @@ def scrape_price(url):
         
         if price_element:
             price_text = price_element.get_text(strip=True)
-            price = float(price_text.replace('.', '').replace(',', '.'))
-            return price
+            return float(price_text.replace('.', '').replace(',', '.'))
     except Exception as e:
         st.error(f"Fehler beim Scraping: {str(e)}")
     return None
 
-# --- Haupt-UI ---
+def main():
+    st.title("🚀 GPU-Preis Tracker Pro")
+    selected_category = st.selectbox("Kategorie wählen", list(PRODUCTS.keys()))
+
 def main():
     st.title("🚀 GPU-Preis Tracker Pro")
     st.markdown("""
