@@ -9,10 +9,11 @@ from fake_useragent import UserAgent
 import os
 import json
 
-# --- Globale Variablen (müssen VOR der main()-Funktion definiert werden) ---
+# --- Konfiguration ---
 USER_AGENT = UserAgent()
-REQUEST_DELAY = (5, 15)
-DATA_FILE = "gpu_prices.json"
+REQUEST_DELAY = (10, 25)  # Deutlich längere Wartezeiten (10-25 Sekunden)
+MAX_RETRIES = 2           # Weniger Wiederholungsversuche
+TIMEOUT = 30              # Längere Timeouts
 
 # --- Produktliste ---
 PRODUCTS = {
@@ -35,103 +36,96 @@ PRODUCTS = {
     }
 }
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {}
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f)
-
-def robust_scrape(url, max_retries=3):
+# --- Verbesserte Scraping-Funktion mit Proxy-Support ---
+def scrape_price(url):
     scraper = cloudscraper.create_scraper()
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    }
-
-    for attempt in range(max_retries):
+    
+    for attempt in range(MAX_RETRIES):
         try:
-            res = scraper.get(url, headers=headers, timeout=10)
-            res.raise_for_status()
-            soup = BeautifulSoup(res.text, 'html.parser')
-
-            preis_element = (
-                soup.find('strong', id='pricerange-min') or
-                soup.find('span', class_='price') or
-                soup.find('div', class_='gh_price')
+            # Zufällige Wartezeit + jitter
+            delay = random.uniform(*REQUEST_DELAY) * (attempt + 1)
+            time.sleep(delay)
+            
+            headers = {
+                'User-Agent': USER_AGENT.random,
+                'Accept-Language': 'de-DE,de;q=0.9',
+                'Referer': 'https://www.google.com/',
+                'DNT': '1'  # Do Not Track Header
+            }
+            
+            # Optional: Proxies hinzufügen (z.B. BrightData/ScraperAPI)
+            proxies = None
+            # proxies = {
+            #     'http': 'http://USERNAME:PASSWORD@proxy-server:port',
+            #     'https': 'http://USERNAME:PASSWORD@proxy-server:port'
+            # }
+            
+            response = scraper.get(
+                url,
+                headers=headers,
+                timeout=TIMEOUT,
+                proxies=proxies
             )
-
-            if preis_element:
-                preis_text = preis_element.get_text(strip=True)
-                preis = float(''.join(c for c in preis_text if c.isdigit() or c in ',.').replace('.', '').replace(',', '.'))
-                datum = datetime.now(TIMEZONE)
-                return preis, datum
+            
+            # Bei Rate-Limiting länger warten
+            if response.status_code == 429:
+                wait_time = 60 * (attempt + 1)  # 1-2 Minuten warten
+                st.warning(f"Rate Limited! Warte {wait_time} Sekunden...")
+                time.sleep(wait_time)
+                continue
+                
+            response.raise_for_status()
+            
+            # Preis extrahieren mit robustem Parsing
+            soup = BeautifulSoup(response.text, 'html.parser')
+            price_element = (
+                soup.find('span', class_='gh_price') or 
+                soup.find('span', class_='price__value') or
+                soup.find('strong', id='pricerange-min')
+            )
+            
+            if price_element:
+                price_text = price_element.get_text(strip=True)
+                price = float(price_text
+                    .replace('€', '')
+                    .replace('.', '')
+                    .replace(',', '.'))
+                return price
+                
         except Exception as e:
-            print(f"Fehler bei Versuch {attempt + 1}: {e}")
-            time.sleep(2 ** attempt)  # Exponentielles Backoff
+            st.error(f"Versuch {attempt + 1} fehlgeschlagen: {str(e)}")
+            continue
+            
+    return None
 
-    return None, None
-
+# --- Hauptfunktion mit optimierter Logik ---
 def main():
-    st.title("🚀 GPU-Preis Tracker Pro")
-    selected_category = st.selectbox("Kategorie wählen", list(PRODUCTS.keys()))
+    st.title("🛒 GPU-Preis Tracker (Geizhals)")
     
-    if st.button("🔄 Preise aktualisieren", type="primary"):
-        progress_bar = st.progress(0)
-        price_data = load_data()
-        current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-        
-        for i, (product, url) in enumerate(PRODUCTS[selected_category].items()):
-            progress_bar.progress((i + 1) / len(PRODUCTS[selected_category]))
-            
+    # Nur 1 Produkt pro Durchlauf prüfen
+    selected_product = st.selectbox(
+        "Modell auswählen",
+        list(PRODUCTS["RTX 5080"].items()),
+        format_func=lambda x: x[0]
+    )
+    
+    if st.button("Preis prüfen", type="primary"):
+        with st.spinner("Scrape läuft (bitte warten...)"):
+
+            name, url = selected_product
             price = scrape_price(url)
-            if price:
-                if product not in price_data:
-                    price_data[product] = []
-                price_data[product].append({
-                    "date": current_date,
-                    "price": price,
-                    "url": url
-                })
-                st.success(f"{product}: {price:.2f}€")
-            else:
-                st.warning(f"{product}: Preis nicht verfügbar")
-        
-        save_data(price_data)
-        st.balloons()
-    
-    # Preisverlauf anzeigen
-    st.subheader("📈 Historische Preisdaten")
-    price_data = load_data()
-    
-    if price_data:
-        df = pd.DataFrame([
-            {"Produkt": product, "Datum": entry["date"], "Preis": entry["price"]}
-            for product, entries in price_data.items()
-            for entry in entries
-        ])
-        
-        if not df.empty:
-            st.line_chart(
-                df,
-                x="Datum",
-                y="Preis",
-                color="Produkt",
-                height=500
-            )
             
-            st.dataframe(
-                df.sort_values("Datum", ascending=False),
-                column_config={
-                    "Preis": st.column_config.NumberColumn(format="%.2f €")
-                },
-                use_container_width=True
-            )
-    else:
-        st.info("Keine Daten verfügbar. Klicke auf 'Preise aktualisieren'.")
+            if price:
+                st.success(f"✅ {name}: {price:.2f}€")
+                # Daten speichern (für Streamlit Cloud angepasst)
+                try:
+                    data = {"product": name, "price": price, "date": datetime.now().isoformat()}
+                    st.session_state.last_price = data
+                    st.json(data)  # Debug-Ausgabe
+                except Exception as e:
+                    st.error(f"Speicherfehler: {str(e)}")
+            else:
+                st.warning(f"❌ {name}: Preis nicht verfügbar")
 
 if __name__ == "__main__":
     main()
