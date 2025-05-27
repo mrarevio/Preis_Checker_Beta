@@ -71,14 +71,6 @@ def scrape_price(url):
 def main():
     st.title("🚀 GPU-Preis Tracker Pro")
     selected_category = st.selectbox("Kategorie wählen", list(PRODUCTS.keys()))
-
-def main():
-    st.title("🚀 GPU-Preis Tracker Pro")
-    st.markdown("""
-        Tracke die Preise von Grafikkarten in Echtzeit von Geizhals.at
-        """)
-    
-    selected_category = st.selectbox("Kategorie wählen", list(PRODUCTS.keys()))
     
     if st.button("🔄 Preise aktualisieren", type="primary"):
         progress_bar = st.progress(0)
