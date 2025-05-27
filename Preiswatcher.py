@@ -7,31 +7,36 @@ import random
 import cloudscraper
 from fake_useragent import UserAgent
 import os
+import json
 
 # --- Streamlit Konfiguration ---
 st.set_page_config(
-    page_title="GPU-Preis Tracker",
+    page_title="🚀 GPU-Preis Tracker Pro",
     page_icon="💻",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- Anti-Scraping-Einstellungen ---
-USER_AGENT = UserAgent()
-REQUEST_DELAY = (3, 8)  # Zufällige Wartezeit zwischen 3-8 Sekunden
-MAX_RETRIES = 3
-
-# --- Datenverwaltung ---
-DATA_DIR = "preis_daten"
-os.makedirs(DATA_DIR, exist_ok=True)
-
-# --- Streamlit UI ---
-st.title("🛒 GPU-Preis Tracker")
+# --- Design-Einstellungen ---
 st.markdown("""
     <style>
-        .stProgress > div > div > div {background-color: #FF4B4B;}
+        .main {background-color: #f0f2f6;}
         .stAlert {border-left: 4px solid #FF4B4B;}
+        .stProgress > div > div > div {background-color: #FF4B4B;}
+        .price-card {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
     </style>
 """, unsafe_allow_html=True)
+
+# --- Globale Variablen ---
+USER_AGENT = UserAgent()
+REQUEST_DELAY = (5, 15)  # Längere Wartezeiten für Geizhals
+DATA_FILE = "gpu_prices.json"
 
 # --- Produktliste ---
 PRODUKTE = {
@@ -45,98 +50,106 @@ PRODUKTE = {
     }
 }
 
+# --- Datenhandling ---
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
+
 # --- Verbesserte Scraping-Funktion ---
-@st.cache_data(show_spinner=False)
-def scrape_preis(url, max_retries=MAX_RETRIES):
+def scrape_price(url):
     scraper = cloudscraper.create_scraper()
+    headers = {
+        'User-Agent': USER_AGENT.random,
+        'Accept-Language': 'de-DE,de;q=0.9',
+        'Referer': 'https://www.google.com/'
+    }
     
-    for attempt in range(max_retries):
-        try:
-            # Zufällige Wartezeit
-            time.sleep(random.uniform(*REQUEST_DELAY))
-            
-            # Headers mit zufälligem User-Agent
-            headers = {
-                'User-Agent': USER_AGENT.random,
-                'Accept-Language': 'de-DE,de;q=0.9'
-            }
-            
-            response = scraper.get(url, headers=headers, timeout=15)
-            
-            if response.status_code == 429:
-                wait_time = (2 ** attempt) + random.uniform(1, 3)
-                st.warning(f"Rate Limit erreicht! Warte {wait_time:.1f} Sekunden...")
-                time.sleep(wait_time)
-                continue
-                
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Preis extrahieren
-            preis_element = soup.find('span', class_='price__value')
-            if preis_element:
-                preis_text = preis_element.get_text(strip=True)
-                return float(preis_text.replace('.', '').replace(',', '.'))
-            
-        except Exception as e:
-            st.error(f"Versuch {attempt + 1} fehlgeschlagen: {str(e)}")
-            continue
-            
+    try:
+        # Zufällige Wartezeit
+        time.sleep(random.uniform(*REQUEST_DELAY))
+        
+        response = scraper.get(url, headers=headers, timeout=20)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        price_element = soup.find('span', {'class': 'gh_price'})
+        
+        if price_element:
+            price_text = price_element.get_text(strip=True)
+            price = float(price_text.replace('.', '').replace(',', '.'))
+            return price
+    except Exception as e:
+        st.error(f"Fehler beim Scraping: {str(e)}")
     return None
 
-# --- Hauptfunktion ---
+# --- Haupt-UI ---
 def main():
-    selected_category = st.selectbox("Kategorie wählen", list(PRODUKTE.keys()))
+    st.title("🚀 GPU-Preis Tracker Pro")
+    st.markdown("""
+        Tracke die Preise von Grafikkarten in Echtzeit von Geizhals.at
+        """)
     
-    if st.button("Preise aktualisieren", type="primary"):
+    selected_category = st.selectbox("Kategorie wählen", list(PRODUCTS.keys()))
+    
+    if st.button("🔄 Preise aktualisieren", type="primary"):
         progress_bar = st.progress(0)
-        results = []
+        price_data = load_data()
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M")
         
-        for i, (produkt, url) in enumerate(PRODUKTE[selected_category].items()):
-            progress_bar.progress((i + 1) / len(PRODUKTE[selected_category]))
-            preis = scrape_preis(url)
+        for i, (product, url) in enumerate(PRODUCTS[selected_category].items()):
+            progress_bar.progress((i + 1) / len(PRODUCTS[selected_category]))
             
-            if preis:
-                results.append({
-                    "Produkt": produkt,
-                    "Preis (€)": preis,
-                    "Datum": datetime.now().strftime("%d.%m.%Y %H:%M"),
-                    "URL": url
+            price = scrape_price(url)
+            if price:
+                if product not in price_data:
+                    price_data[product] = []
+                price_data[product].append({
+                    "date": current_date,
+                    "price": price,
+                    "url": url
                 })
+                st.success(f"{product}: {price:.2f}€")
             else:
-                st.warning(f"Konnte Preis für {produkt} nicht abrufen")
+                st.warning(f"{product}: Preis nicht verfügbar")
         
-        if results:
-            df = pd.DataFrame(results)
-            st.session_state.last_data = df
-            st.success("Preise erfolgreich aktualisiert!")
-            
-            # Daten speichern
-            file_path = os.path.join(DATA_DIR, f"{selected_category.replace(' ', '_')}.csv")
-            df.to_csv(file_path, index=False)
-            
-            # Ergebnisse anzeigen
-            st.dataframe(
+        save_data(price_data)
+        st.balloons()
+    
+    # Preisverlauf anzeigen
+    st.subheader("📈 Historische Preisdaten")
+    price_data = load_data()
+    
+    if price_data:
+        df = pd.DataFrame([
+            {"Produkt": product, "Datum": entry["date"], "Preis": entry["price"]}
+            for product, entries in price_data.items()
+            for entry in entries
+        ])
+        
+        if not df.empty:
+            st.line_chart(
                 df,
-                column_config={
-                    "URL": st.column_config.LinkColumn("Link"),
-                    "Preis (€)": st.column_config.NumberColumn(
-                        format="%.2f €"
-                    )
-                },
-                hide_index=True,
-                use_container_width=True
+                x="Datum",
+                y="Preis",
+                color="Produkt",
+                height=500
             )
             
-            # Preisverlauf visualisieren
-            if os.path.exists(file_path):
-                hist_data = pd.read_csv(file_path)
-                st.line_chart(
-                    hist_data,
-                    x="Datum",
-                    y="Preis (€)",
-                    color="Produkt"
-                )
+            st.dataframe(
+                df.sort_values("Datum", ascending=False),
+                column_config={
+                    "Preis": st.column_config.NumberColumn(format="%.2f €")
+                },
+                use_container_width=True
+            )
+    else:
+        st.info("Keine Daten verfügbar. Klicke auf 'Preise aktualisieren'.")
 
 if __name__ == "__main__":
     main()
