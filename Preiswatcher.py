@@ -132,14 +132,34 @@ def robust_scrape(url, max_retries=3):
     return None, None
 
 def speichere_tagesdaten(daten, dateipfad):
-    df = pd.DataFrame(daten)
-    if not df.empty:
-        vorhanden = pd.read_json(dateipfad) if os.path.exists(dateipfad) else pd.DataFrame()
-        aktualisiert = pd.concat([vorhanden, df])
+    if daten:  # Only proceed if we have data
+        df = pd.DataFrame(daten)
+        # Ensure we have all required columns
+        for col in ['product', 'price', 'date', 'url']:
+            if col not in df.columns:
+                df[col] = None
+                
+        if os.path.exists(dateipfad):
+            vorhanden = pd.read_json(dateipfad)
+            # Ensure existing data has all columns
+            for col in ['product', 'price', 'date', 'url']:
+                if col not in vorhanden.columns:
+                    vorhanden[col] = None
+            aktualisiert = pd.concat([vorhanden, df])
+        else:
+            aktualisiert = df
+            
         aktualisiert.to_json(dateipfad, orient='records', indent=2)
 
 def lade_daten(dateipfad):
-    return pd.read_json(dateipfad) if os.path.exists(dateipfad) else pd.DataFrame()
+    if os.path.exists(dateipfad):
+        df = pd.read_json(dateipfad)
+        # Ensure required columns exist
+        for col in ['product', 'price', 'date', 'url']:
+            if col not in df.columns:
+                df[col] = None  # Add missing column with null values
+        return df
+    return pd.DataFrame(columns=['product', 'price', 'date', 'url'])  # Return empty DataFrame with correct columns
 
 def filter_timeframe(df, days):
     if df.empty:
@@ -327,7 +347,16 @@ with tab1:
         time.sleep(2)  # Pause hinzufügen
     speichere_tagesdaten(daten_5070ti, os.path.join(DATA_DIR, "preise_5070ti.json"))
     df_5070ti = lade_daten(os.path.join(DATA_DIR, "preise_5070ti.json"))
-    st.dataframe(df_5070ti[['product', 'price', 'date', 'url']], use_container_width=True)
+    
+    # Add error handling
+    if not df_5070ti.empty:
+        try:
+            st.dataframe(df_5070ti[['product', 'price', 'date', 'url']], use_container_width=True)
+        except KeyError as e:
+            st.error(f"Datenformatfehler: Fehlende Spalten im DataFrame. Bitte überprüfen Sie die gespeicherten Daten.")
+            st.write("Verfügbare Spalten:", df_5070ti.columns.tolist())
+    else:
+        st.warning("Keine Daten verfügbar für RTX 5070 Ti Modelle.")
 
 with tab2:
     st.header("Preisübersicht für 5080")
@@ -339,7 +368,16 @@ with tab2:
         time.sleep(2)  # Pause hinzufügen
     speichere_tagesdaten(daten_5080, os.path.join(DATA_DIR, "preise_5080.json"))
     df_5080 = lade_daten(os.path.join(DATA_DIR, "preise_5080.json"))
-    st.dataframe(df_5080[['product', 'price', 'date', 'url']], use_container_width=True)
+    
+    # Add error handling
+    if not df_5080.empty:
+        try:
+            st.dataframe(df_5080[['product', 'price', 'date', 'url']], use_container_width=True)
+        except KeyError as e:
+            st.error(f"Datenformatfehler: Fehlende Spalten im DataFrame. Bitte überprüfen Sie die gespeicherten Daten.")
+            st.write("Verfügbare Spalten:", df_5080.columns.tolist())
+    else:
+        st.warning("Keine Daten verfügbar für RTX 5080 Modelle.")
 
 
 
