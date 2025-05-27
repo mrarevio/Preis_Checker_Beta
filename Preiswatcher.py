@@ -7,6 +7,9 @@ import plotly.graph_objects as go
 import os
 import time
 import cloudscraper
+import random
+import time
+from fake_useragent import UserAgent  # Install with: pip install fake-useragent
 
 # ========== KONFIGURATION ==========
 TIMEZONE = None
@@ -101,19 +104,39 @@ produkte_5080 = {
     "Palit GeForce RTX 5080 GamingPro": "https://geizhals.at/palit-geforce-rtx-5080-gamingpro-ne75080019t2-gb2031a-a3382521.html",
 }
 
+import random
+import time
+from fake_useragent import UserAgent  # Install with: pip install fake-useragent
+
 def robust_scrape(url, max_retries=3):
     scraper = cloudscraper.create_scraper()
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
-                      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-    }
-
+    ua = UserAgent()
+    
     for attempt in range(max_retries):
         try:
-            res = scraper.get(url, headers=headers, timeout=10)
-            res.raise_for_status()
+            # Randomize headers & delays
+            headers = {
+                'User-Agent': ua.random,
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.google.com/'
+            }
+            
+            # Random delay (3-10 seconds)
+            delay = random.uniform(3, 10)
+            time.sleep(delay)
+            
+            res = scraper.get(url, headers=headers, timeout=15)
+            
+            # If rate-limited, wait longer before retrying
+            if res.status_code == 429:
+                wait_time = (2 ** attempt) + random.uniform(1, 5)
+                print(f"⚠️ Rate limited. Waiting {wait_time:.1f}s before retry {attempt + 1}")
+                time.sleep(wait_time)
+                continue
+                
+            res.raise_for_status()  # Check for other HTTP errors
+            
             soup = BeautifulSoup(res.text, 'html.parser')
-
             preis_element = (
                 soup.find('strong', id='pricerange-min') or
                 soup.find('span', class_='price') or
@@ -123,13 +146,16 @@ def robust_scrape(url, max_retries=3):
             if preis_element:
                 preis_text = preis_element.get_text(strip=True)
                 preis = float(''.join(c for c in preis_text if c.isdigit() or c in ',.').replace('.', '').replace(',', '.'))
-                datum = datetime.now(TIMEZONE)
+                datum = datetime.now()
                 return preis, datum
+                
         except Exception as e:
-            print(f"Fehler bei Versuch {attempt + 1}: {e}")
-            time.sleep(2 ** attempt)  # Exponentielles Backoff
-
-    return None, None
+            print(f"❌ Fehler bei Versuch {attempt + 1} für {url}: {e}")
+            if attempt == max_retries - 1:
+                return None, None
+            time.sleep((2 ** attempt) + random.uniform(1, 3))  # Exponential backoff
+    
+    return None, None  # All retries failed
 
 def speichere_tagesdaten(daten, dateipfad):
     if daten:  # Only proceed if we have data
