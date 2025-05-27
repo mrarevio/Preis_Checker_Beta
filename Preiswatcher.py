@@ -14,7 +14,7 @@ USER_AGENT = UserAgent()
 REQUEST_DELAY = (5, 15)
 DATA_FILE = "gpu_prices.json"
 # --- Produktliste ---
-PRODUKTE = {
+PRODUCTS = {
     "RTX 5070 Ti": {
         "Gainward RTX 5070 Ti": "https://geizhals.at/gainward-geforce-rtx-5070-ti-v186843.html",
         "MSI RTX 5070 Ti": "https://geizhals.at/msi-geforce-rtx-5070-ti-v186766.html"
