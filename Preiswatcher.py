@@ -3,11 +3,9 @@ import requests
 from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime, timedelta
-import plotly.express as px
+import plotly.graph_objects as go
 import os
 import time
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import cloudscraper
 
 # ========== KONFIGURATION ==========
