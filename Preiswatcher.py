@@ -45,28 +45,35 @@ def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f)
 
-def scrape_price(url):
+def robust_scrape(url, max_retries=3):
     scraper = cloudscraper.create_scraper()
     headers = {
-        'User-Agent': USER_AGENT.random,
-        'Accept-Language': 'de-DE,de;q=0.9',
-        'Referer': 'https://www.google.com/'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                      '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
     }
-    
-    try:
-        time.sleep(random.uniform(*REQUEST_DELAY))
-        response = scraper.get(url, headers=headers, timeout=20)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        price_element = soup.find('span', {'class': 'gh_price'})
-        
-        if price_element:
-            price_text = price_element.get_text(strip=True)
-            return float(price_text.replace('.', '').replace(',', '.'))
-    except Exception as e:
-        st.error(f"Fehler beim Scraping: {str(e)}")
-    return None
+
+    for attempt in range(max_retries):
+        try:
+            res = scraper.get(url, headers=headers, timeout=10)
+            res.raise_for_status()
+            soup = BeautifulSoup(res.text, 'html.parser')
+
+            preis_element = (
+                soup.find('strong', id='pricerange-min') or
+                soup.find('span', class_='price') or
+                soup.find('div', class_='gh_price')
+            )
+
+            if preis_element:
+                preis_text = preis_element.get_text(strip=True)
+                preis = float(''.join(c for c in preis_text if c.isdigit() or c in ',.').replace('.', '').replace(',', '.'))
+                datum = datetime.now(TIMEZONE)
+                return preis, datum
+        except Exception as e:
+            print(f"Fehler bei Versuch {attempt + 1}: {e}")
+            time.sleep(2 ** attempt)  # Exponentielles Backoff
+
+    return None, None
 
 def main():
     st.title("🚀 GPU-Preis Tracker Pro")
